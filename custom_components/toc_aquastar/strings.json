@@ -1,0 +1,30 @@
+{
+  "config": {
+    "abort": {
+      "already_configured": "This Aquastar meter is already configured."
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the Aquastar portal.",
+      "invalid_auth": "Invalid sectoken. Please check your token and try again.",
+      "meter_mismatch": "This sectoken is for a different meter than the one configured.",
+      "no_readings": "Connected successfully but no usage data was returned.",
+      "unknown": "An unexpected error occurred."
+    },
+    "step": {
+      "reauth_confirm": {
+        "data": {
+          "sectoken": "Security Token"
+        },
+        "description": "Your Aquastar security token is no longer valid. Please enter a new one.",
+        "title": "Re-authenticate Aquastar"
+      },
+      "user": {
+        "data": {
+          "sectoken": "Security Token"
+        },
+        "description": "Enter the security token (sectoken) from your Aquastar portal URL.",
+        "title": "Configure Aquastar"
+      }
+    }
+  }
+}

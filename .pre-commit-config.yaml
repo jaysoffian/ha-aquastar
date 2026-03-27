@@ -1,0 +1,47 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: pretty-format-json
+        args:
+          - --autofix
+          - --top-keys=domain,name
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.8
+    hooks:
+      - id: ruff
+        name: ruff check
+        args: [--fix]
+      - id: ruff-format
+        name: ruff format
+
+  - repo: local
+    hooks:
+      - id: ty-check
+        name: ty check
+        entry: uv run ty check --exclude tests/
+        language: system
+        types: [python]
+        pass_filenames: false
+
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.408
+    hooks:
+      - id: pyright
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: uv run pytest tests/ -v
+        language: system
+        types: [python]
+        pass_filenames: false

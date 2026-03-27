@@ -1,0 +1,69 @@
+[project]
+name = "ha-aquastar"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[dependency-groups]
+dev = [
+    "homeassistant",
+    "pytest",
+    "pytest-asyncio",
+    "aresponses",
+    "pre-commit",
+    "xlrd>=2.0.1",
+    "ty>=0.0.26",
+    "typer>=0.24.1",
+]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "A",      # flake8-builtins — shadowing builtins
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "PL",     # pylint (ruff reimplementation)
+    "RUF",    # ruff-specific
+    "PIE",    # flake8-pie
+    "RET",    # flake8-return
+    "PERF",   # perflint
+    "FURB",   # refurb
+    "LOG",    # flake8-logging
+    "G",      # flake8-logging-format
+    "T20",    # flake8-print — catch stray prints
+    "PTH",    # flake8-use-pathlib
+    "TID",    # flake8-tidy-imports
+]
+
+ignore = [
+    "PLR09",  # too-many-* (arguments, branches, statements) — not useful for HA entities
+    "PLR2004", # magic-value-comparison — too noisy for protocol code with numeric constants
+    "PLW2901", # redefined-loop-variable — common pattern in asyncio
+    "SIM108",  # use-ternary-expression — often less readable
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*/__main__.py" = ["T20"]  # allow print in CLI entry points
+
+[tool.pyright]
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+extraPaths = ["custom_components", "custom_components/toc_aquastar", "custom_components/toc_aquastar/client"]
+reportIncompatibleVariableOverride = false
+reportUnknownMemberType = false
+reportUnknownParameterType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
