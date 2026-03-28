@@ -6,6 +6,7 @@
 
 ## Verification
 - Run: `pre-commit run --all`
+- Never run ruff, pyright, or other linting/type-checking tools directly — pre-commit manages its own environments for these.
 
 ## Python
 - Always use `uv` to run Python, pytest, and tools (never bare `python` or `python3`).

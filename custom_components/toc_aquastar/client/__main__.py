@@ -44,7 +44,13 @@ def usage(
 ) -> None:
     """Fetch hourly water usage from Aquastar."""
     sectoken = _get_sectoken()
-    end_date = _parse_date(end) if end else date.today()
+    # Portal end date is exclusive, so add a day when defaulting to "today"
+    # to include today's readings.  Explicit --end is passed as-is (the user
+    # controls the semantics).
+    if end:
+        end_date = _parse_date(end)
+    else:
+        end_date = date.today() + timedelta(days=1)
     start_date = _parse_date(start) if start else (end_date - timedelta(days=days))
 
     typer.echo(f"Fetching usage from {start_date} to {end_date}...")

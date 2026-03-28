@@ -55,3 +55,25 @@ See [docs/development.md](docs/development.md).
 The integration polls the Aquastar portal for hourly water usage data and imports it as Home Assistant long-term statistics, making it available in the Energy Dashboard.
 
 Data is fetched every 30 minutes. On first setup, up to 13 months of historical data is imported.
+
+### Water cost estimates
+
+The integration also computes estimated utility costs using Town of Cary's single-family residential rates (inside corporate limits, 1" or smaller meter). This includes:
+
+- **Monthly base fee** ($4.09)
+- **Tiered water charges** ($5.46 / $6.13 / $7.74 per 1,000 gallons)
+- **Flat sewer charge** ($11.69 per 1,000 gallons)
+
+The rate schedule is hard-coded since it rarely changes — typically once per year on July 1.
+
+### Correcting costs after a rate update
+
+If the rates in the code are updated after the new rates have already taken effect (e.g. you update in September for rates that changed July 1), previously recorded cost statistics will be based on the old rates. To recalculate:
+
+1. Update `rates.py` with the new rate schedule
+2. Restart Home Assistant
+3. Go to **Developer Tools → Statistics**
+4. Find and delete the `toc_aquastar:{meter_number}_water_cost` statistic
+5. Within 30 minutes, the integration will automatically rebuild all cost statistics using the corrected rates
+
+Consumption data is not affected by this process.

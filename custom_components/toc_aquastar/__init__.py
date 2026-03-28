@@ -46,5 +46,9 @@ async def async_unload_entry(_hass: HomeAssistant, entry: AquastarConfigEntry) -
 async def async_remove_entry(hass: HomeAssistant, entry: AquastarConfigEntry) -> None:
     """Remove a config entry — clear associated statistics."""
     meter_number = entry.data.get(CONF_METER_NUMBER, "")
-    statistic_id = f"{DOMAIN}:{meter_number}_water_consumption"
-    get_instance(hass).async_clear_statistics([statistic_id])
+    get_instance(hass).async_clear_statistics(
+        [
+            f"{DOMAIN}:{meter_number}_water_consumption",
+            f"{DOMAIN}:{meter_number}_water_cost",
+        ]
+    )
