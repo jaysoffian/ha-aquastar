@@ -5,5 +5,4 @@ __pycache__/
 *.egg-info/
 .DS_Store
 .claude/settings.local.json
-uv.lock
 .envrc

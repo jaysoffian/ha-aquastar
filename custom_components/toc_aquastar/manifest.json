@@ -11,8 +11,6 @@
   "documentation": "https://github.com/jaysoffian/ha-aquastar",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "requirements": [
-    "xlrd>=2.0.1"
-  ],
+  "requirements": [],
   "version": "0.0.1"
 }

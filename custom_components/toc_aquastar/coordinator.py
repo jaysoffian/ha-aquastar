@@ -8,7 +8,6 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import aiohttp
 from homeassistant.components.recorder.models import (
     StatisticData,
     StatisticMeanType,
@@ -30,10 +29,10 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from .client import (
-    AquastarClient,
     AquastarError,
     AuthenticationError,
     WaterUsageReading,
+    download_usage,
 )
 from .const import BACKFILL_DAYS, DOMAIN, UPDATE_INTERVAL_MINUTES
 from .rates import (
@@ -57,10 +56,9 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
     def __init__(
         self,
         hass: HomeAssistant,
-        client: AquastarClient,
         config_entry: AquastarConfigEntry,
+        sectoken: str,
         meter_number: str,
-        websession: aiohttp.ClientSession,
     ) -> None:
         super().__init__(
             hass,
@@ -69,9 +67,8 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
             name="Aquastar",
             update_interval=timedelta(minutes=UPDATE_INTERVAL_MINUTES),
         )
-        self.client = client
+        self._sectoken = sectoken
         self.meter_number = meter_number
-        self.websession = websession
         self._statistic_id = f"{DOMAIN}:{meter_number}_water_consumption"
         self._cost_statistic_id = f"{DOMAIN}:{meter_number}_water_cost"
 
@@ -102,6 +99,7 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
             name=f"Aquastar {self.meter_number} Water Consumption",
             source=DOMAIN,
             statistic_id=self._statistic_id,
+            unit_class="volume",
             unit_of_measurement=UnitOfVolume.GALLONS,
         )
 
@@ -114,6 +112,7 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
             name=f"Aquastar {self.meter_number} Water Cost",
             source=DOMAIN,
             statistic_id=self._cost_statistic_id,
+            unit_class=None,
             unit_of_measurement="USD",
         )
 
@@ -344,10 +343,8 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
         """Fetch all available historical data in a single request."""
         today = datetime.now(_TZ).date()
         start = today - timedelta(days=BACKFILL_DAYS)
-        # Portal end date is exclusive, so use tomorrow to include today.
-        end = today + timedelta(days=1)
-        _LOGGER.debug("Backfill fetching %s to %s", start, end)
-        return self._filter_readings(await self.client.async_get_usage(start, end))
+        _LOGGER.debug("Backfill fetching %s to %s", start, today)
+        return self._filter_readings(await download_usage(self._sectoken, start, today))
 
     async def _async_incremental_fetch(
         self, last_stat: Mapping[str, Sequence[Mapping[str, Any]]]
@@ -365,8 +362,6 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
         today = datetime.now(_TZ).date()
         if start > today:
             return []
-        # Portal end date is exclusive, so use tomorrow to include today.
-        end = today + timedelta(days=1)
-        _LOGGER.debug("Incremental fetching %s to %s", start, end)
-        readings = await self.client.async_get_usage(start, end)
+        _LOGGER.debug("Incremental fetching %s to %s", start, today)
+        readings = await download_usage(self._sectoken, start, today)
         return self._filter_readings([r for r in readings if r.timestamp > cutoff])

@@ -1,9 +1,9 @@
 check:
-	pre-commit run --all
+	prek run --all-files
 
 hassfest:
 	podman run --rm -v "$(PWD)/custom_components:/github/workspace" ghcr.io/home-assistant/hassfest
 
 update:
-	pre-commit autoupdate
+	prek autoupdate
 	uv sync --upgrade

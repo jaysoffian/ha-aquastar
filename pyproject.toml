@@ -1,22 +1,21 @@
 [project]
 name = "ha-aquastar"
 version = "0.1.0"
-requires-python = ">=3.13"
+requires-python = ">=3.14.2"
+dependencies = []
 
 [dependency-groups]
 dev = [
-    "homeassistant",
+    "homeassistant==2026.3.4",
     "pytest",
     "pytest-asyncio",
     "aresponses",
-    "pre-commit",
-    "xlrd>=2.0.1",
-    "ty>=0.0.26",
     "typer>=0.24.1",
+    "ty>=0.0.26",
 ]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = [

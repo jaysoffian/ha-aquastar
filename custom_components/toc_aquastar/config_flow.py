@@ -8,19 +8,17 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
 
 from .client import (
-    AquastarClient,
+    TIMEZONE,
     AquastarError,
     AuthenticationError,
     CannotConnectError,
-    make_ssl_context,
+    download_usage,
 )
-from .client.const import TIMEZONE
 from .const import CONF_METER_NUMBER, CONF_SECTOKEN, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -109,26 +107,16 @@ class AquastarConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         Returns (meter_number, None) on success, or (None, error_key).
         """
-        ssl_ctx = await self.hass.async_add_executor_job(make_ssl_context)
-        connector = aiohttp.TCPConnector(ssl=ssl_ctx)
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            # No DummyCookieJar needed here (unlike the long-lived runtime
-            # session) — this session is discarded after a single validation
-            # call, so the jar can't accumulate stale cookies across refreshes.
-            async with aiohttp.ClientSession(
-                connector=connector, timeout=timeout
-            ) as session:
-                client = AquastarClient(session, sectoken=sectoken)
-                end = datetime.now(ZoneInfo(TIMEZONE)).date()
-                start = end - timedelta(days=7)
-                readings = await client.async_get_usage(start, end)
+            end = datetime.now(ZoneInfo(TIMEZONE)).date()
+            start = end - timedelta(days=7)
+            readings = await download_usage(sectoken, start, end)
 
-                if not readings:
-                    _LOGGER.error("No readings returned during validation")
-                    return None, "no_readings"
+            if not readings:
+                _LOGGER.error("No readings returned during validation")
+                return None, "no_readings"
 
-                return readings[0].meter_number, None
+            return readings[0].meter_number, None
 
         except AuthenticationError:
             _LOGGER.error("Invalid sectoken")
