@@ -6,12 +6,14 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from custom_components.toc_aquastar.client import WaterUsageReading
-from custom_components.toc_aquastar.coordinator import AquastarCoordinator
+from custom_components.toc_aquastar.coordinator import (
+    AquastarCoordinator,
+    billing_period,
+)
 from custom_components.toc_aquastar.rates import (
     RATE_SCHEDULES,
     RateSchedule,
     calculate_interval_cost,
-    calculate_monthly_base_fee,
     get_rate_schedule,
 )
 
@@ -100,14 +102,6 @@ class TestCalculateIntervalCost:
         assert cost == pytest.approx(100 * (5.25 + _PRIOR_SEWER) / 1000)
 
 
-class TestMonthlyBaseFee:
-    def test_current(self) -> None:
-        assert calculate_monthly_base_fee(date(2026, 1, 1)) == 4.09
-
-    def test_prior(self) -> None:
-        assert calculate_monthly_base_fee(date(2025, 6, 30)) == 3.93
-
-
 def _reading(ts: datetime, gallons: int) -> WaterUsageReading:
     return WaterUsageReading(timestamp=ts, meter_number="M1", usage_gallons=gallons)
 
@@ -122,14 +116,33 @@ def _t2_cost(gallons: int) -> float:
     return gallons * (6.13 + _SEWER) / 1000
 
 
-_BASE = 4.09  # current monthly base fee
+class TestBillingPeriod:
+    """Test billing_period helper."""
+
+    def test_day1_is_calendar_month(self) -> None:
+        assert billing_period(date(2026, 1, 1), 1) == (2026, 1)
+        assert billing_period(date(2026, 1, 31), 1) == (2026, 1)
+        assert billing_period(date(2026, 2, 1), 1) == (2026, 2)
+
+    def test_day16_on_or_after(self) -> None:
+        assert billing_period(date(2026, 1, 16), 16) == (2026, 1)
+        assert billing_period(date(2026, 1, 31), 16) == (2026, 1)
+        assert billing_period(date(2026, 2, 15), 16) == (2026, 1)
+
+    def test_day16_before(self) -> None:
+        assert billing_period(date(2026, 1, 15), 16) == (2025, 12)
+        assert billing_period(date(2026, 1, 1), 16) == (2025, 12)
+
+    def test_year_boundary(self) -> None:
+        assert billing_period(date(2026, 1, 5), 16) == (2025, 12)
+        assert billing_period(date(2025, 12, 16), 16) == (2025, 12)
 
 
 class TestBuildCostStatistics:
     """Test AquastarCoordinator.build_cost_statistics."""
 
-    def test_backfill_from_zero(self) -> None:
-        """Full backfill: base fee on first reading of each month."""
+    def test_backfill_calendar_month(self) -> None:
+        """With billing_day=1, tier resets on calendar month boundary."""
         readings = [
             _reading(datetime(2026, 1, 15, 10, tzinfo=_TZ), 100),
             _reading(datetime(2026, 1, 15, 11, tzinfo=_TZ), 200),
@@ -137,64 +150,58 @@ class TestBuildCostStatistics:
         ]
         stats = AquastarCoordinator.build_cost_statistics(readings)
         assert len(stats) == 3
-        assert "state" in stats[0] and "sum" in stats[0]
-        assert "state" in stats[1] and "sum" in stats[1]
-        assert "state" in stats[2] and "sum" in stats[2]
-        # First reading includes base fee
-        assert stats[0]["state"] == pytest.approx(_BASE + _t1_cost(100))
-        # Second reading: no base fee
+        assert "state" in stats[0] and "state" in stats[1] and "state" in stats[2]
+        assert stats[0]["state"] == pytest.approx(_t1_cost(100))
         assert stats[1]["state"] == pytest.approx(_t1_cost(200))
-        # New month: base fee again
-        assert stats[2]["state"] == pytest.approx(_BASE + _t1_cost(50))
+        assert stats[2]["state"] == pytest.approx(_t1_cost(50))
 
-    def test_incremental_with_prior_month_consumption(self) -> None:
-        """Incremental update mid-month: no base fee, correct tier."""
+    def test_billing_day_16_reset(self) -> None:
+        """With billing_day=16, tier resets on the 16th, not the 1st."""
+        readings = [
+            # Dec 16 period: these two accumulate together
+            _reading(datetime(2026, 1, 10, 10, tzinfo=_TZ), 100),
+            _reading(datetime(2026, 1, 15, 11, tzinfo=_TZ), 200),
+            # Jan 16 period: new billing period resets cumulative
+            _reading(datetime(2026, 1, 16, 0, tzinfo=_TZ), 50),
+        ]
+        stats = AquastarCoordinator.build_cost_statistics(readings, billing_day=16)
+        assert len(stats) == 3
+        assert "state" in stats[0] and "state" in stats[1] and "state" in stats[2]
+        assert stats[0]["state"] == pytest.approx(_t1_cost(100))
+        assert stats[1]["state"] == pytest.approx(_t1_cost(200))
+        # New billing period — cumulative resets
+        assert stats[2]["state"] == pytest.approx(_t1_cost(50))
+
+    def test_billing_day_16_no_reset_at_calendar_month(self) -> None:
+        """With billing_day=16, the calendar month boundary does NOT reset."""
+        readings = [
+            _reading(datetime(2026, 1, 31, 23, tzinfo=_TZ), 100),
+            # Feb 1 is still in the Jan 16 billing period
+            _reading(datetime(2026, 2, 1, 0, tzinfo=_TZ), 100),
+        ]
+        stats = AquastarCoordinator.build_cost_statistics(
+            readings,
+            billing_day=16,
+            starting_cost_sum=5.0,
+            starting_cumulative_period_gallons=6000,
+            starting_period=(2026, 1),
+        )
+        assert "state" in stats[0] and "state" in stats[1]
+        # Both readings in the same billing period — cumulative carries over
+        assert stats[0]["state"] == pytest.approx(_t2_cost(100))
+        assert stats[1]["state"] == pytest.approx(_t2_cost(100))
+
+    def test_incremental_with_prior_period_consumption(self) -> None:
+        """Incremental update mid-period: correct tier placement."""
         readings = [
             _reading(datetime(2026, 1, 20, 14, tzinfo=_TZ), 100),
         ]
-        # With 5000 gallons already consumed — tier 2, base fee already applied
         stats = AquastarCoordinator.build_cost_statistics(
             readings,
             starting_cost_sum=10.0,
-            starting_cumulative_month_gallons=5000,
-            starting_month=(2026, 1),
-            base_fee_already_applied=True,
+            starting_cumulative_period_gallons=5000,
+            starting_period=(2026, 1),
         )
         assert "state" in stats[0] and "sum" in stats[0]
         assert stats[0]["state"] == pytest.approx(_t2_cost(100))
         assert stats[0]["sum"] == pytest.approx(10.0 + _t2_cost(100))
-
-    def test_incremental_new_month_gets_base_fee(self) -> None:
-        """Incremental update at month boundary adds base fee."""
-        readings = [
-            _reading(datetime(2026, 2, 1, 0, tzinfo=_TZ), 100),
-        ]
-        # starting_month is January, reading is February — new month
-        stats = AquastarCoordinator.build_cost_statistics(
-            readings,
-            starting_cost_sum=10.0,
-            starting_cumulative_month_gallons=3000,
-            starting_month=(2026, 1),
-            base_fee_already_applied=True,
-        )
-        assert "state" in stats[0]
-        assert stats[0]["state"] == pytest.approx(_BASE + _t1_cost(100))
-
-    def test_incremental_month_boundary_resets_cumulative(self) -> None:
-        """When readings span a month boundary, the new month resets to 0."""
-        readings = [
-            _reading(datetime(2026, 1, 31, 23, tzinfo=_TZ), 100),
-            _reading(datetime(2026, 2, 1, 0, tzinfo=_TZ), 100),
-        ]
-        stats = AquastarCoordinator.build_cost_statistics(
-            readings,
-            starting_cost_sum=5.0,
-            starting_cumulative_month_gallons=6000,
-            starting_month=(2026, 1),
-            base_fee_already_applied=True,
-        )
-        assert "state" in stats[0] and "state" in stats[1]
-        # January reading: cumulative 6000, tier 2, no base fee (already applied)
-        assert stats[0]["state"] == pytest.approx(_t2_cost(100))
-        # February reading: cumulative resets, tier 1, base fee added
-        assert stats[1]["state"] == pytest.approx(_BASE + _t1_cost(100))

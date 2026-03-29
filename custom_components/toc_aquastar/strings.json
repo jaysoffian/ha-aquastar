@@ -26,5 +26,15 @@
         "title": "Configure Aquastar"
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "billing_day": "Billing cycle start day"
+        },
+        "description": "Day of the month your billing cycle starts (1\u201328). Used for tiered water rate calculations."
+      }
+    }
   }
 }

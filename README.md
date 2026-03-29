@@ -60,11 +60,12 @@ Data is fetched every 30 minutes. On first setup, up to 13 months of historical 
 
 The integration also computes estimated utility costs using Town of Cary's single-family residential rates (inside corporate limits, 1" or smaller meter). This includes:
 
-- **Monthly base fee** ($4.09)
 - **Tiered water charges** ($5.46 / $6.13 / $7.74 per 1,000 gallons)
 - **Flat sewer charge** ($11.69 per 1,000 gallons)
 
 The rate schedule is hard-coded since it rarely changes — typically once per year on July 1.
+
+Tiered rates are applied based on cumulative usage within each billing cycle. By default the billing cycle aligns with calendar months (day 1). If your billing cycle starts on a different day, go to **Settings > Devices & Services > Aquastar** and configure the **Billing cycle start day** in the integration options. Note that Town of Cary's actual meter read dates vary by a few days from month to month depending on the read route schedule, so the billing cycle day is an approximation. Check a few recent bills to find the most typical start day.
 
 ### Correcting costs after a rate update
 

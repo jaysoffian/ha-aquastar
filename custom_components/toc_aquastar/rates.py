@@ -28,7 +28,6 @@ class RateSchedule:
     """Complete rate schedule with an effective date."""
 
     effective_date: date
-    monthly_base_fee: float
     water_tiers: tuple[RateTier, ...]
     sewer_rate_per_1000_gallons: float
 
@@ -38,7 +37,6 @@ RATE_SCHEDULES: tuple[RateSchedule, ...] = (
     # Effective July 1, 2025
     RateSchedule(
         effective_date=date(2025, 7, 1),
-        monthly_base_fee=4.09,
         water_tiers=(
             RateTier(upper_bound_gallons=5_000, rate_per_1000_gallons=5.46),
             RateTier(upper_bound_gallons=8_000, rate_per_1000_gallons=6.13),
@@ -49,7 +47,6 @@ RATE_SCHEDULES: tuple[RateSchedule, ...] = (
     # Effective July 1, 2024
     RateSchedule(
         effective_date=date(2024, 7, 1),
-        monthly_base_fee=3.93,
         water_tiers=(
             RateTier(upper_bound_gallons=5_000, rate_per_1000_gallons=5.25),
             RateTier(upper_bound_gallons=8_000, rate_per_1000_gallons=5.89),
@@ -103,8 +100,3 @@ def calculate_interval_cost(
     cost += usage_gallons * schedule.sewer_rate_per_1000_gallons / 1_000.0
 
     return cost
-
-
-def calculate_monthly_base_fee(usage_date: date) -> float:
-    """Return the monthly base fee for the given date."""
-    return get_rate_schedule(usage_date).monthly_base_fee

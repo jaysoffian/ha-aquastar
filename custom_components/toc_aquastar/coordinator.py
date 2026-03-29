@@ -34,10 +34,15 @@ from .client import (
     WaterUsageReading,
     download_usage,
 )
-from .const import BACKFILL_DAYS, DOMAIN, UPDATE_INTERVAL_MINUTES
+from .const import (
+    BACKFILL_DAYS,
+    CONF_BILLING_DAY,
+    DEFAULT_BILLING_DAY,
+    DOMAIN,
+    UPDATE_INTERVAL_MINUTES,
+)
 from .rates import (
     calculate_interval_cost,
-    calculate_monthly_base_fee,
     get_rate_schedule,
 )
 
@@ -46,6 +51,29 @@ _TZ = ZoneInfo("America/New_York")
 _LOGGER = logging.getLogger(__name__)
 
 type AquastarConfigEntry = ConfigEntry[AquastarCoordinator]
+
+
+def billing_period(d: date, billing_day: int) -> tuple[int, int]:
+    """Return a (year, month) tuple identifying which billing period *d* falls in.
+
+    A billing period starts on *billing_day* and runs to the day before
+    the next *billing_day*.  For ``billing_day=16``, Jan 16 through Feb 15
+    is the "January" period ``(2026, 1)``, and Feb 16 onward is ``(2026, 2)``.
+
+    When ``billing_day`` is 1 this collapses to normal calendar months.
+    """
+    if d.day >= billing_day:
+        return (d.year, d.month)
+    # Before the billing day — still in the prior period.
+    first_of_month = d.replace(day=1)
+    prev = first_of_month - timedelta(days=1)
+    return (prev.year, prev.month)
+
+
+def billing_period_start(d: date, billing_day: int) -> datetime:
+    """Return the start-of-period datetime for the billing period containing *d*."""
+    year, month = billing_period(d, billing_day)
+    return datetime(year, month, billing_day, tzinfo=_TZ)
 
 
 class AquastarCoordinator(DataUpdateCoordinator[None]):
@@ -69,6 +97,9 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
         )
         self._sectoken = sectoken
         self.meter_number = meter_number
+        self._billing_day: int = int(
+            config_entry.options.get(CONF_BILLING_DAY, DEFAULT_BILLING_DAY)
+        )
         self._statistic_id = f"{DOMAIN}:{meter_number}_water_consumption"
         self._cost_statistic_id = f"{DOMAIN}:{meter_number}_water_cost"
 
@@ -120,43 +151,32 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
     def build_cost_statistics(
         readings: list[WaterUsageReading],
         *,
+        billing_day: int = DEFAULT_BILLING_DAY,
         starting_cost_sum: float = 0.0,
-        starting_cumulative_month_gallons: float = 0.0,
-        starting_month: tuple[int, int] | None = None,
-        base_fee_already_applied: bool = False,
+        starting_cumulative_period_gallons: float = 0.0,
+        starting_period: tuple[int, int] | None = None,
     ) -> list[StatisticData]:
         """Derive cost statistics from readings.
 
         For a full backfill the defaults are correct (all zeros, no prior
-        month).  For an incremental update, pass the running cost sum and
-        the cumulative month-to-date consumption so that tier placement
-        accounts for earlier readings in the same month.
-
-        The monthly base fee is added to the first reading of each new
-        calendar month.  Set *base_fee_already_applied* when resuming
-        mid-month so the base fee isn't double-counted.
+        period).  For an incremental update, pass the running cost sum and
+        the cumulative period-to-date consumption so that tier placement
+        accounts for earlier readings in the same billing period.
         """
         cost_sum = starting_cost_sum
-        cumulative_month_gallons = starting_cumulative_month_gallons
-        current_month = starting_month
-        month_base_applied = base_fee_already_applied
+        cumulative_period_gallons = starting_cumulative_period_gallons
+        current_period = starting_period
         stats: list[StatisticData] = []
 
         for reading in readings:
-            reading_month = (reading.timestamp.year, reading.timestamp.month)
-            if reading_month != current_month:
-                cumulative_month_gallons = 0.0
-                current_month = reading_month
-                month_base_applied = False
-
-            interval_cost = 0.0
-            if not month_base_applied:
-                interval_cost += calculate_monthly_base_fee(reading.timestamp.date())
-                month_base_applied = True
+            period = billing_period(reading.timestamp.date(), billing_day)
+            if period != current_period:
+                cumulative_period_gallons = 0.0
+                current_period = period
 
             schedule = get_rate_schedule(reading.timestamp.date())
-            interval_cost += calculate_interval_cost(
-                reading.usage_gallons, cumulative_month_gallons, schedule
+            interval_cost = calculate_interval_cost(
+                reading.usage_gallons, cumulative_period_gallons, schedule
             )
             cost_sum += interval_cost
             stats.append(
@@ -166,7 +186,7 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
                     sum=cost_sum,
                 )
             )
-            cumulative_month_gallons += reading.usage_gallons
+            cumulative_period_gallons += reading.usage_gallons
 
         return stats
 
@@ -198,12 +218,13 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
             _LOGGER.info("Cost statistics missing — rebuilding from backfill data")
             backfill_readings = await self._async_backfill()
             if backfill_readings:
-                cost_statistics = self.build_cost_statistics(backfill_readings)
-                assert "sum" in cost_statistics[-1]
+                cost_statistics = self.build_cost_statistics(
+                    backfill_readings, billing_day=self._billing_day
+                )
                 _LOGGER.debug(
                     "Inserting %d cost statistics (sum=%.2f)",
                     len(cost_statistics),
-                    cost_statistics[-1]["sum"],
+                    cost_statistics[-1].get("sum", 0),
                 )
                 async_add_external_statistics(
                     self.hass, self._cost_metadata, cost_statistics
@@ -218,8 +239,7 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
                 return
             consumption_sum = 0.0
             cost_sum = 0.0
-            prior_month_gallons = 0.0
-            last_stat_month: tuple[int, int] | None = None
+            prior_period_gallons = 0.0
         else:
             stat_row = last_stat[self._statistic_id][0]
             _LOGGER.debug(
@@ -239,32 +259,28 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
                 )
                 return
             consumption_sum = float(last_sum)
-            last_start = stat_row.get("start")
-            assert last_start is not None
-            last_stat_dt = datetime.fromtimestamp(last_start, tz=_TZ)
-            last_stat_month = (last_stat_dt.year, last_stat_dt.month)
 
-            # Compute month-to-date consumption for tiered cost calculation.
-            # The difference between consumption_sum and the running sum at
-            # the start of the first reading's month tells us how many
-            # gallons were already consumed this month.
-            first_month_start = readings[0].timestamp.replace(
-                day=1, hour=0, minute=0, second=0, microsecond=0
+            # Compute period-to-date consumption for tiered cost calculation.
+            # Find the billing period start for the first new reading, then
+            # query hourly statistics from that point to compute how many
+            # gallons were already consumed in this billing period.
+            period_start = billing_period_start(
+                readings[0].timestamp.date(), self._billing_day
             )
-            prev_month_stats = await get_instance(self.hass).async_add_executor_job(
+            period_stats = await get_instance(self.hass).async_add_executor_job(
                 statistics_during_period,
                 self.hass,
-                first_month_start - timedelta(days=32),
-                first_month_start,
+                period_start - timedelta(hours=1),
+                readings[0].timestamp,
                 {self._statistic_id},
-                "month",
+                "hour",
                 None,
                 {"sum"},
             )
-            sum_at_month_start = 0.0
-            if prev_rows := prev_month_stats.get(self._statistic_id):
-                sum_at_month_start = float(prev_rows[-1].get("sum") or 0)
-            prior_month_gallons = consumption_sum - sum_at_month_start
+            sum_at_period_start = 0.0
+            if period_rows := period_stats.get(self._statistic_id):
+                sum_at_period_start = float(period_rows[0].get("sum") or 0)
+            prior_period_gallons = consumption_sum - sum_at_period_start
 
             # Re-fetch cost stat in case it was just rebuilt above.
             if not has_cost:
@@ -303,24 +319,21 @@ class AquastarCoordinator(DataUpdateCoordinator[None]):
                 day_totals[d],
             )
 
-        # Build cost statistics with correct cumulative month tracking.
-        # The base fee was already applied if the last recorded stat is in
-        # the same month as the first new reading.
-        first_month = (readings[0].timestamp.year, readings[0].timestamp.month)
+        # Build cost statistics with correct billing period tracking.
+        first_period = billing_period(readings[0].timestamp.date(), self._billing_day)
         cost_statistics = self.build_cost_statistics(
             readings,
+            billing_day=self._billing_day,
             starting_cost_sum=cost_sum,
-            starting_cumulative_month_gallons=prior_month_gallons,
-            starting_month=first_month,
-            base_fee_already_applied=last_stat_month == first_month,
+            starting_cumulative_period_gallons=prior_period_gallons,
+            starting_period=first_period,
         )
 
-        assert "sum" in cost_statistics[-1]
         _LOGGER.debug(
             "Inserting %d statistics (consumption_sum=%.0f, cost_sum=%.2f)",
             len(consumption_statistics),
             consumption_sum,
-            cost_statistics[-1]["sum"],
+            cost_statistics[-1].get("sum", 0),
         )
         async_add_external_statistics(
             self.hass, self._consumption_metadata, consumption_statistics
