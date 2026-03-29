@@ -7,12 +7,12 @@ import re
 import ssl
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from html.parser import HTMLParser
-from typing import Annotated
+from typing import Annotated, ClassVar
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import aiohttp
+from bs4 import BeautifulSoup, Tag
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,24 +84,6 @@ class CannotConnectError(AquastarError):
 
 
 # ---------------------------------------------------------------------------
-# Data types
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class WaterUsageReading:
-    """A single hourly water usage reading."""
-
-    timestamp: datetime
-    usage_gallons: int
-    meter_number: str
-
-    def __str__(self) -> str:
-        fields = [str(self.timestamp), str(self.usage_gallons), self.meter_number]
-        return "\t".join(fields)
-
-
-# ---------------------------------------------------------------------------
 # SSL
 # ---------------------------------------------------------------------------
 
@@ -119,113 +101,113 @@ def _get_ssl_context() -> ssl.SSLContext:
 
 
 # ---------------------------------------------------------------------------
-# HTML parsing
+# Data types / HTML parsing
 # ---------------------------------------------------------------------------
 
 
-class _FormParser(HTMLParser):
-    """Extract hidden fields, menu links, date inputs, and action PJMRs."""
+@dataclass(frozen=True)
+class WaterUsageReading:
+    """A single hourly water usage reading."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.hidden: dict[str, str] = {}
-        self.ext_fields: list[str] = []
-        self.menu: dict[str, str] = {}
-        self.date_fields: list[str] = []
-        self.search_pjmr: str | None = None
+    timestamp: datetime
+    usage_gallons: int
+    meter_number: str
 
-        self._link_pjmr: str | None = None
-        self._link_text = ""
-        self._in_link = False
+    def __str__(self) -> str:
+        fields = [str(self.timestamp), str(self.usage_gallons), self.meter_number]
+        return "\t".join(fields)
 
-    _PJMR_RE = re.compile(r"performMagic\('(?:URLShortcutFilter)?(PJMR\d+)'\)")
+    @classmethod
+    def parse_table(cls, html: str) -> list[WaterUsageReading]:
+        """Extract usage records from the results HTML table.
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        a = dict(attrs)
-        if tag == "input":
-            self._handle_input(a)
-        elif tag == "a":
-            onclick = a.get("onclick", "") or a.get("href", "")
-            m = self._PJMR_RE.search(onclick or "")
-            if m:
-                self._link_pjmr = m.group(1)
-                self._link_text = ""
-                self._in_link = True
+        Each data row has 4 data cells (class "pjr") after the action cell:
+          Meter #, Service, Read Date/Time, Usage in Gallons
 
-    def handle_data(self, data: str) -> None:
-        if self._in_link:
-            self._link_text += data.strip()
+        The last row is a totals row with &nbsp; placeholders — skip it.
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        readings: list[WaterUsageReading] = []
 
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "a" and self._in_link:
-            if self._link_pjmr and self._link_text:
-                self.menu[self._link_text] = self._link_pjmr
-            self._link_pjmr = None
-            self._in_link = False
+        for row in soup.select("tbody tr"):
+            cells = [td.get_text() for td in row.find_all("td", class_="pjr")]
+            if len(cells) < 4:
+                continue
+            meter, _service, dt_str, gallons_str = (s.strip() for s in cells[:4])
+            if not meter:
+                continue  # totals row
 
-    def _handle_input(self, a: dict[str, str | None]) -> None:
-        itype = (a.get("type") or "").lower()
-        name = a.get("name") or ""
-        value = a.get("value") or ""
-
-        if itype == "hidden":
-            if name == "PJ_Ext_Fld":
-                self.ext_fields.append(value)
-            else:
-                self.hidden[name] = value
-        elif itype == "text" and "date" in (a.get("onfocus") or "").lower():
-            self.date_fields.append(name)
-        elif itype == "button" and value == "Search":
-            m = self._PJMR_RE.search(a.get("onclick") or "")
-            if m:
-                self.search_pjmr = m.group(1)
-
-
-def _parse_form(html: str) -> _FormParser:
-    p = _FormParser()
-    p.feed(html)
-    return p
-
-
-# ---------------------------------------------------------------------------
-# Table parsing
-# ---------------------------------------------------------------------------
-
-# Match the 4 consecutive data cells directly.  The row's action cell
-# contains a nested <table> whose inner </tr> confuses row-based regexes,
-# but the 4 data cells always appear together in this exact pattern.
-_CELLS_RE = re.compile(
-    r'<td class="pjr">([^<]+)</td>\s*'
-    r'<td class="pjr">([^<]+)</td>\s*'
-    r'<td class="pjr">([^<]+)</td>\s*'
-    r'<td class="pjr align-right">([^<]+)</td>'
-)
-
-
-def _parse_usage_table(html: str) -> list[WaterUsageReading]:
-    """Extract usage records from the results HTML table.
-
-    Each data row has 4 data cells (after the action cell):
-      Meter #, Service, Read Date/Time, Usage in Gallons
-
-    The last row is a totals row with &nbsp; placeholders — skip it.
-    """
-    readings: list[WaterUsageReading] = []
-    for meter, _service, dt_str, gallons_str in _CELLS_RE.findall(html):
-        if "&nbsp;" in meter:
-            continue  # totals row
-
-        timestamp = datetime.strptime(dt_str.strip(), "%m/%d/%y %I:%M %p")
-        readings.append(
-            WaterUsageReading(
-                timestamp=timestamp.replace(tzinfo=_TZ),
-                usage_gallons=int(gallons_str.strip().replace(",", "")),
-                meter_number=meter.strip(),
+            timestamp = datetime.strptime(dt_str, "%m/%d/%y %I:%M %p")
+            readings.append(
+                cls(
+                    timestamp=timestamp.replace(tzinfo=_TZ),
+                    usage_gallons=int(gallons_str.replace(",", "")),
+                    meter_number=meter,
+                )
             )
-        )
 
-    readings.sort(key=lambda r: r.timestamp)
-    return readings
+        readings.sort(key=lambda r: r.timestamp)
+        return readings
+
+
+@dataclass(frozen=True)
+class _FormData:
+    """Parsed form state from an Aquastar page."""
+
+    _pjmr_re: ClassVar[re.Pattern[str]] = re.compile(
+        r"performMagic\('(?:URLShortcutFilter)?(PJMR\d+)'\)"
+    )
+
+    hidden: dict[str, str]
+    ext_fields: list[str]
+    menu: dict[str, str]
+    date_fields: list[str]
+    search_pjmr: str | None
+
+    @classmethod
+    def parse(cls, html: str) -> _FormData:
+        """Extract hidden fields, menu links, date inputs, and action PJMRs."""
+        soup = BeautifulSoup(html, "html.parser")
+
+        hidden: dict[str, str] = {}
+        ext_fields: list[str] = []
+        for inp in soup.find_all("input", type="hidden"):
+            name = str(inp.get("name", ""))
+            value = str(inp.get("value", ""))
+            if name == "PJ_Ext_Fld":
+                ext_fields.append(value)
+            else:
+                hidden[name] = value
+
+        date_fields = [
+            str(inp["name"])
+            for inp in soup.find_all("input", type="text")
+            if "date" in str(inp.get("onfocus") or "").lower()
+        ]
+
+        menu: dict[str, str] = {}
+        for a in soup.find_all("a"):
+            onclick = str(a.get("onclick") or a.get("href") or "")
+            m = cls._pjmr_re.search(onclick)
+            if m:
+                text = a.get_text(strip=True)
+                if text:
+                    menu[text] = m.group(1)
+
+        search_pjmr: str | None = None
+        btn = soup.find("input", type="button", value="Search")
+        if isinstance(btn, Tag):
+            m = cls._pjmr_re.search(str(btn.get("onclick") or ""))
+            if m:
+                search_pjmr = m.group(1)
+
+        return cls(
+            hidden=hidden,
+            ext_fields=ext_fields,
+            menu=menu,
+            date_fields=date_fields,
+            search_pjmr=search_pjmr,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +303,7 @@ async def _fetch(
             raise AuthenticationError(f"Sectoken URL returned status {resp.status}")
         html = await resp.text(encoding=FORM_CHARSET)
 
-    p1 = _parse_form(html)
+    p1 = _FormData.parse(html)
     if "PJ_SESSION_ID" not in p1.hidden:
         raise AuthenticationError("No PJ_SESSION_ID in response")
 
@@ -338,7 +320,7 @@ async def _fetch(
         resp.raise_for_status()
         html = await resp.text(encoding=FORM_CHARSET)
 
-    p2 = _parse_form(html)
+    p2 = _FormData.parse(html)
     if not p2.search_pjmr:
         raise AquastarError("No Search button found on hourly usage page")
     if len(p2.date_fields) < 2:
@@ -362,7 +344,7 @@ async def _fetch(
         resp.raise_for_status()
         html = await resp.text(encoding=FORM_CHARSET)
 
-    readings = _parse_usage_table(html)
+    readings = WaterUsageReading.parse_table(html)
     _LOGGER.debug("Found %d readings", len(readings))
 
     if not readings:

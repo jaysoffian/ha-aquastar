@@ -8,9 +8,9 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from custom_components.toc_aquastar.client import (
+    WaterUsageReading,
     _encode_form,
-    _parse_form,
-    _parse_usage_table,
+    _FormData,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -20,7 +20,7 @@ _TZ = ZoneInfo("America/New_York")
 class TestParseUsageTable:
     def test_parse_results(self) -> None:
         html = (FIXTURES / "results.html").read_text()
-        readings = _parse_usage_table(html)
+        readings = WaterUsageReading.parse_table(html)
         assert len(readings) == 6
         # Should be sorted ascending
         for i in range(1, len(readings)):
@@ -37,14 +37,14 @@ class TestParseUsageTable:
             assert r.meter_number
 
     def test_no_results(self) -> None:
-        readings = _parse_usage_table("<html><body></body></html>")
+        readings = WaterUsageReading.parse_table("<html><body></body></html>")
         assert readings == []
 
 
 class TestParseForm:
     def test_parse_dashboard(self) -> None:
         html = (FIXTURES / "dashboard.html").read_text(encoding="iso-8859-1")
-        form = _parse_form(html)
+        form = _FormData.parse(html)
         assert form.hidden["PJ_SESSION_ID"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         assert form.hidden["PJ_GROUP_ID"] == "0"
         assert form.hidden["PJ_PAGE_ID"] == "1"
@@ -52,7 +52,7 @@ class TestParseForm:
 
     def test_parse_hourly_page(self) -> None:
         html = (FIXTURES / "hourly.html").read_text(encoding="iso-8859-1")
-        form = _parse_form(html)
+        form = _FormData.parse(html)
         assert form.hidden["PJ_SESSION_ID"] == "11111111-2222-3333-4444-555555555555"
         assert form.hidden["PJ_GROUP_ID"] == "1"
         assert form.hidden["PJ_PAGE_ID"] == "0"
@@ -60,7 +60,7 @@ class TestParseForm:
         assert form.search_pjmr == "PJMR14"
 
     def test_missing_page_state(self) -> None:
-        form = _parse_form("<html></html>")
+        form = _FormData.parse("<html></html>")
         assert "PJ_SESSION_ID" not in form.hidden
 
 

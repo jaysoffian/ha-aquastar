@@ -11,6 +11,8 @@
   "documentation": "https://github.com/jaysoffian/ha-aquastar",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "requirements": [],
+  "requirements": [
+    "beautifulsoup4>=4.14.3"
+  ],
   "version": "0.0.1"
 }
