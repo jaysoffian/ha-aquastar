@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import ssl
@@ -358,8 +359,6 @@ async def _fetch(
 
 
 if __name__ == "__main__":
-    import asyncio
-
     from typer import Option, run
 
     end = date.today()
