@@ -84,23 +84,6 @@ class CannotConnectError(AquastarError):
 
 
 # ---------------------------------------------------------------------------
-# SSL
-# ---------------------------------------------------------------------------
-
-
-_ssl_context: ssl.SSLContext | None = None
-
-
-def _get_ssl_context() -> ssl.SSLContext:
-    """Build (once) an SSL context that includes the correct intermediate cert."""
-    global _ssl_context  # noqa: PLW0603
-    if _ssl_context is None:
-        _ssl_context = ssl.create_default_context()
-        _ssl_context.load_verify_locations(cadata=_DIGICERT_EV_RSA_CA_G2_PEM)
-    return _ssl_context
-
-
-# ---------------------------------------------------------------------------
 # Data types / HTML parsing
 # ---------------------------------------------------------------------------
 
@@ -250,6 +233,24 @@ def _base_fields(hidden: dict[str, str], pjmr: str) -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# SSL
+# ---------------------------------------------------------------------------
+
+
+_ssl_context: ssl.SSLContext | None = None
+
+
+async def _get_ssl_context() -> ssl.SSLContext:
+    """Return the cached SSL context, creating it in an executor if needed."""
+    global _ssl_context  # noqa: PLW0603
+    if _ssl_context is None:
+        ctx = await asyncio.to_thread(ssl.create_default_context)
+        ctx.load_verify_locations(cadata=_DIGICERT_EV_RSA_CA_G2_PEM)
+        _ssl_context = ctx
+    return _ssl_context
+
+
+# ---------------------------------------------------------------------------
 # Main download logic
 # ---------------------------------------------------------------------------
 
@@ -274,7 +275,7 @@ async def download_usage(
     """
     connector = aiohttp.TCPConnector(
         resolver=aiohttp.ThreadedResolver(),
-        ssl=_get_ssl_context(),
+        ssl=await _get_ssl_context(),
     )
     timeout = aiohttp.ClientTimeout(total=60)
     try:
