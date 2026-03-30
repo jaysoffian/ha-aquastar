@@ -1,5 +1,14 @@
 # CLAUDE.md
 
+## Setup (run once per environment)
+When running in a cloud/container environment (e.g. Claude Code on the web), install the latest `uv` and `prek` first:
+- `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/j178/prek/releases/latest/download/prek-installer.sh | sh`
+
+On the user's local machine, `uv` and `prek` are already installed. Do not reinstall them.
+
+Then: `uv sync && prek install`
+
 ## Git
 - Do NOT include Claude attribution in commit messages.
 - Always verify `git status` is clean before making changes.
